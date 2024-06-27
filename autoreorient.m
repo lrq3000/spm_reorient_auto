@@ -19,8 +19,8 @@ function returncode = autoreorient(varargin)
 % * just_check: if true, the software will only check if the input image has an issue with its structure (ie, reflection or shearing), and will return 0 if no issue, or >0 if there is an issue (1: shearing, 2: anisotropic scaling, 4: reflection(s), greater values than 4 represent the sum of multiple issues found, eg, 5 = shearing + reflections).
 %
 % License: MIT License, except otherwise noted in comments around the code the other license pertains to.
-% Copyright (C) 2020-2022 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
-% v0.6.18
+% Copyright (C) 2020-2024 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
+% v0.6.19
 %
 % Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, includin without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 % The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -63,7 +63,7 @@ function returncode = autoreorient(varargin)
     aux.varspull(arguments);
     
     % Sanity Checks on input variables
-    if inputpath == 0 or mode == 0
+    if inputpath == 0 || mode == 0
         error('Missing arguments: inputpath and mode are mandatory!');
     end
 
