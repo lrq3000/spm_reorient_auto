@@ -12,11 +12,19 @@ function returncode = autoreorient(varargin)
 % ## Input variables:
 % * inputpath: path to the input nifti file to reorient to template.
 % * regmode: defines how the registration to template will be done: 'affine' or 'jointhistogram'. Note that jointhistogram uses spm_coreg(), it is the recommended mode as it produces better results generally and produces true rigid-body transforms without reflections nor anisotropic scaling nor shearing, and is equivalent to the 'ecc' or 'mi' mode in the antecedant package spm_auto_reorient_coregister. 'affine' uses spm_affreg() and is not recommended as it can produce reflections (inverted hemispheres) and anisotropic scaling, even with the 'rigid-body' regtype flag.
-% * flags_affine: custom flags to pass to the SPM12's spm_affreg() function.
+% * flags_affine: custom flags to pass to the SPM12's spm_affreg() function (if regmode is set to `affine`).
 % * noshearing: if true, if shearing is detected after reorientation to template, try to nullify the shearing. Default: true.
+% * isorescale: if true, if anisotropic scaling is detected after reorientation to template, try to make the scaling isotropic. If false, the scaling will be kept as is (can be anisotropic). If empty, the scaling will be removed. Default: true.
 % * affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
-% * precoreg_reset_orientation: before coregistration, reset orientation? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
+% * precoreg: if true, do a pre-coregistration by translation of the centroid (ie, resetting origin). This should not be necessary for the joint histogram method, but it ensures the origin and start for the genetic algorithm is closer to interesting solutions (ie, not starting in the air). Default: true.
+% * precoreg_reset_orientation: before coregistration, reset orientation (ie, reset the whole orientation matrix - this is non-destructive)? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
 % * just_check: if true, the software will only check if the input image has an issue with its structure (ie, reflection or shearing), and will return 0 if no issue, or >0 if there is an issue (1: shearing, 2: anisotropic scaling, 4: reflection(s), greater values than 4 represent the sum of multiple issues found, eg, 5 = shearing + reflections).
+% * debugmode: if true, will output debug information.
+%
+% ## Output variables:
+% * returncode: 0 if no issue with the input image structure, or >0 if there is an issue (1: shearing, 2: anisotropic scaling, 4: reflection(s), greater values than 4 represent the sum of multiple issues found, eg, 5 = shearing + reflections).
+% In addition, progress, warnings and errors will be displayed in the console.
+% Furthermore, there will be some debug outputs if debugmode is enabled.
 %
 % License: MIT License, except otherwise noted in comments around the code the other license pertains to.
 % Copyright (C) 2020-2024 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
