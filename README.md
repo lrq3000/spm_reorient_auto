@@ -27,7 +27,8 @@ Another function, `auto_acpc_coreg.m`, expands on the same ideas to allow coregi
 
 To install this tool :
 
-* Add `spm12` (and optionally `spm12\toolbox\OldNorm` if you want to use old affine method) to the path in MATLAB.
+* Add `spm12` to the path in MATLAB.
+    * Optional: you can add `spm12\toolbox\OldNorm` to the path in MATLAB too if you want to use old affine method `affreg`, but we strongly disadvise it as it may cause reflections, even in rigid-body mode.
 * Simply add this (auto_acpc_reorient) folder to the path in MATLAB too (or `cd` inside before typing the commands).
 
 This will allow the commands `auto_acpc_reorient()` and `auto_acpc_coreg()` to be called from command-line (if no argument is given, a file selector dialog will open).
