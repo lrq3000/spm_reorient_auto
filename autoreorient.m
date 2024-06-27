@@ -141,7 +141,7 @@ function returncode = autoreorient(varargin)
     smoothed_vol2 = spm_smoothto8bit(smoothed_vol, 20);
     % Y = spm_read_vols(smoothed_vol2);  % direct access to the data matrix
     % imagesc(Y(:,:,20))  % show a slice
-    keyboard
+    % keyboard
 
     % == Manual/Pre coregistration (without using SPM)
     if precoreg
@@ -410,8 +410,8 @@ function returncode = autoreorient(varargin)
         M = spm_matrix(x);
         % Apply the reorientation and save back the new coordinations
         % also apply an inversion to project into the input volume space (instead of template space)
-        spm_get_space(inputpath, pinv(M)*spm_get_space(inputpath));  % input_vol.mat == spm_get_space(inputpath)
-        % alternative to : M \ input_vol.mat
+        spm_get_space(inputpath, pinv(M)*spm_get_space(inputpath));  % spm_get_space(inputpath) == input_vol.mat
+        % alternative to (but slower because we are not using the pseudoinverse here) : M \ input_vol.mat
         % TODO: to enhance performance, first do a spm_coreg using a binarized input image (ie, a brain mask), using the mean as is done for the centroids calculation? Just to ensure to have a good starting point for orientation.
     end %endif
     fprintf('Autoreorientation done!\n');
