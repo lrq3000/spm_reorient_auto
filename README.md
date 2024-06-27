@@ -37,11 +37,15 @@ Note that this tool was tested on SPM12 v7771 (on 2024-06-27) and MATLAB R2023b.
 
 ## Usage
 
-Type `help auto_acpc_reorient`, for all the details and various options for reorientation of a T1.
+Very basic usage on a T1 (structural MRI) image:
 
-Type `help auto_acpc_coreg` for coregistering options.
+```autoreorient('inputpath', 't1_orig.nii', 'regmode', 'jointhistogram')```
 
-Both scripts allows to use SPM filedialogs GUI, by simply typing `auto_acpc_reorient` or `auto_acpc_coreg` in the MATLAB prompt.
+TODO: facade functions auto_acpc_reorient and auto_acpc_coreg to easily reorient or coregister images, using autoreorient in the background.
+
+Helper facade functions are provided for convenience: `help auto_acpc_reorient`, for all the details and various options for reorientation of a T1. Type `help auto_acpc_coreg` for coregistering options.
+
+Both facade scripts allows to use SPM filedialogs GUI, by simply typing `auto_acpc_reorient` or `auto_acpc_coreg` in the MATLAB prompt.
 
 Note: by default, the 't1group' template will be used, which will use `T1_template_CAT12_rm_withskull.nii`. This is a template generated on 10 subjects using CAT12 that were manually reoriented to AC-PC and averaged, this provides better performance for reorientation than the more blurry MNI template. Note that this template is slightly better aligned to the AC-PC plane than the original MNI template, so that there may be a slight rotation bias compared to MNI if you use this custom template (usually it's mostly unnoticeable and this should have no influence if afterwards you do the SPM normalization on MNI on your data).
 
@@ -54,7 +58,7 @@ Note that the scripts cannot be used from SPM12 GUI nor the BATCH system.
 
 ## Performance
 
-There is no guarantee that this will work 100% of the times, although it was empirically observed to produce good results with our own data (young and old healthy subjects, ADKPD patients, and most of brain damaged patients even with significant movement or metal artifacts).
+There is no guarantee that this will work 100% of the times, although it was empirically observed to produce good results with our own data (young and old healthy or brain lesioned subjects of various severity up to extremely severe and of various etiologies including traumatic and anoxic, even with significant movement or metal artifacts or simulated nulling of whole brain areas).
 
 The best results we got were by doing the following steps:
 
@@ -64,8 +68,6 @@ The best results we got were by doing the following steps:
 4. Coregister the functional onto the structural (this fine-tunes rotation to precisely match the subject's structural)
 
 The last 2 steps can be done by calling `auto_acpc_coreg()`, which has optimized default parameters for this task.
-
-For indication, on a dataset of ~400 subjects with some heavily brain damaged or artifacted, the coregistration success rate was more than 95%. We have plans to conduct a more formal analysis but (as usual with open source) there is no guarantee it will happen in the near future :-)
 
 For a comparison of various methods for AC-PC reorientation, the following article is a very good read:
 

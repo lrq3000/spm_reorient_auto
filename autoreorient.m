@@ -1,7 +1,7 @@
 function returncode = autoreorient(varargin)
 % autoreorient(inputpath, regmode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, precoreg_reset_orientation, just_check, debugmode)
 % 
-% autoreorient of structural and BOLD and other MRI modalities for SPM12 and MATLAB (tested on v2018b)
+% Autoreorientation to the AC-PC plane and with the origin set on the AC, for structural (T1, MPRAGE), BOLD and other MRI modalities for SPM12 and MATLAB
 %
 % This function supports named arguments, use it like this:
 % autoreorient('inputpath', 'path/to/file.nii', 'mode', 'jointhistogram', 'debugmode', true)
