@@ -1,4 +1,4 @@
-function returncode = autoreorient(varargin)
+function [returncode, Mdiff] = autoreorient(varargin)
 % autoreorient(inputpath, regmode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, precoreg_reset_orientation, just_check, debugmode)
 % 
 % Autoreorientation to the AC-PC plane and with the origin set on the AC, for structural (T1, MPRAGE), BOLD and other MRI modalities for SPM12 and MATLAB
@@ -12,10 +12,10 @@ function returncode = autoreorient(varargin)
 % ## Input variables:
 % * inputpath: path to the input nifti file to reorient to template.
 % * regmode: defines how the registration to template will be done: 'affine' or 'jointhistogram'. Note that jointhistogram uses spm_coreg(), it is the recommended mode as it produces better results generally and produces true rigid-body transforms without reflections nor anisotropic scaling nor shearing, and is equivalent to the 'ecc' or 'mi' mode in the antecedant package spm_auto_reorient_coregister. 'affine' uses spm_affreg() and is not recommended as it can produce reflections (inverted hemispheres) and anisotropic scaling, even with the 'rigid-body' regtype flag.
-% * flags_affine: custom flags to pass to the SPM12's spm_affreg() function (if regmode is set to `affine`).
+% * flags_affine: custom flags to pass to the SPM12's spm_affreg() function (if regmode is set to `affine`). Default: [] (will then use SPM defaults).
 % * noshearing: if true, if shearing is detected after reorientation to template, try to nullify the shearing. Default: true.
-% * isorescale: if true, if anisotropic scaling is detected after reorientation to template, try to make the scaling isotropic. If false, the scaling will be kept as is (can be anisotropic). If empty, the scaling will be removed. Default: true.
-% * affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
+% * isorescale: if true, if anisotropic scaling is detected after reorientation to template, try to make the scaling isotropic. If false, the scaling will be kept as is (can be anisotropic). If empty [], the scaling will be removed (for debug purposes). Default: true.
+% * affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained. This essentially ensures that any transform gets converted to a rigid-body transform. Note that these decompositions can cause the end result to be very far from correctly oriented, as the closest rigid-body transform can be far from the affine or non-linear transform provided as input.
 % * precoreg: if true, do a pre-coregistration by translation of the centroid (ie, resetting origin). This should not be necessary for the joint histogram method, but it ensures the origin and start for the genetic algorithm is closer to interesting solutions (ie, not starting in the air). Default: true.
 % * precoreg_reset_orientation: before coregistration, reset orientation (ie, reset the whole orientation matrix - this is non-destructive)? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
 % * just_check: if true, the software will only check if the input image has an issue with its structure (ie, reflection or shearing), and will return 0 if no issue, or >0 if there is an issue (1: shearing, 2: anisotropic scaling, 4: reflection(s), greater values than 4 represent the sum of multiple issues found, eg, 5 = shearing + reflections).
@@ -23,12 +23,13 @@ function returncode = autoreorient(varargin)
 %
 % ## Output variables:
 % * returncode: 0 if no issue with the input image structure, or >0 if there is an issue (1: shearing, 2: anisotropic scaling, 4: reflection(s), greater values than 4 represent the sum of multiple issues found, eg, 5 = shearing + reflections).
+% * Mdiff: the difference between the original orientation matrix and the new orientation matrix after reorientation. This can be used to apply the same transform to other images (eg, here the first BOLD image was coregistered to a structural, then the Mdiff can be used externally to apply the same transform on all BOLD volumes timepoints).
 % In addition, progress, warnings and errors will be displayed in the console.
 % Furthermore, there will be some debug outputs if debugmode is enabled.
 %
 % License: MIT License, except otherwise noted in comments around the code the other license pertains to.
 % Copyright (C) 2020-2024 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
-% v0.7.0
+% v0.7.2
 %
 % Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, includin without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 % The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -57,7 +58,7 @@ function returncode = autoreorient(varargin)
         'flags_affine', [], ...
         'noshearing', true, ...
         'isorescale', true, ...
-        'affdecomposition', 'qr', ...
+        'affdecomposition', 'none', ...
         'precoreg', true, ...
         'precoreg_reset_orientation', false, ...
         'just_check', false, ...
@@ -76,28 +77,35 @@ function returncode = autoreorient(varargin)
         error('Missing arguments: inputpath and regmode are mandatory!');
     end
 
+    % == Constants
+    % Structure errors codes
+    STRUCTURE_ERROR_INITIAL_SHEARING = 1;  % if shearing was already present initially before any manipulation
+    STRUCTURE_ERROR_INITIAL_ANISOTROPIC_SCALING = 2;
+    STRUCTURE_ERROR_INITIAL_REFLECTION = 4;
+    STRUCTURE_ERROR_AFTER_SHEARING = 8;  % if shearing appears or remains after the reorientation
+    STRUCTURE_ERROR_AFTER_ANISOTROPIC_SCALING = 16;
+    STRUCTURE_ERROR_AFTER_REFLECTION = 32;
+
     % == Load brain templates
     % Load input and template images
     input_vol = spm_vol(strtrim(inputpath));
     template_vol = spm_vol(strtrim('T1_template_CAT12_rm_withskull.nii'));
+    % Store original orientation matrix
+    M_orig = input_vol.mat;
 
     % == Sanity checks on input image
-    iM = spm_imatrix(input_vol.mat);
     structure_errors_counter = 0;
-    %iM_orig = spm_imatrix(input_vol.private.mat0);  % NOT reliable: svol.private.mat0 is simply the previously saved orientation matrix, not necessarily the original one
-    if (sum(abs(iM(10:12))) > 1E-5)
-        fprintf('Warning: Shearing detected in input image, this can sometimes be fixed by setting precoreg_reset_orientation = "scanner" or noshearing = true.\n');
-        structure_errors_counter = structure_errors_counter + 1;
+    if (check_shearing(input_vol))
+        warning('Shearing detected in input image, this can sometimes be fixed by setting precoreg_reset_orientation = "scanner" or noshearing = true.');
+        structure_errors_counter = structure_errors_counter + STRUCTURE_ERROR_INITIAL_SHEARING;
     end
-    if (sum(abs(iM(7:9))) > 1E-5)  % alternative: calculate the QR decomposition
-        fprintf('Warning: Anisotropic scaling detected in input image, this can sometimes be fixed by setting precoreg_reset_orientation = "scanner".\n');
-        structure_errors_counter = structure_errors_counter + 2;
+    if (check_anisotropic_scaling(input_vol))
+        warning('Anisotropic scaling detected in input image, this can sometimes be fixed by setting precoreg_reset_orientation = "scanner".');
+        structure_errors_counter = structure_errors_counter + STRUCTURE_ERROR_INITIAL_ANISOTROPIC_SCALING;
     end
-    [Q, R] = qr(input_vol.mat(1:3,1:3));
-    Z = sign(diag(R)) .* abs(diag(R));
-    if ((single(det(Q)) == -1.0) || (any(sign(Z) == -1, 'all') && isodd(sum(sign(Z) == -1))))
-        fprintf('Warning: Reflections detected in input image (i.e., the orientation is not preserved from the original orientation, so the left side of the brain _may_ be inversed with the right side!), this can be fixed by setting precoreg_reset_orientation = "scanner".\n');  % note that some scanner (such as Siemens) may set a reflection in the initial orientation matrix they set, without impacting the left-right orientation (ie, the reflection is in another dimension)
-        structure_errors_counter = structure_errors_counter + 4;
+    if (check_reflection(input_vol))
+        warning('Reflections detected in input image (i.e., the orientation is not preserved from the original orientation, so the left side of the brain _may_ be inversed with the right side!), this can be fixed by setting precoreg_reset_orientation = "scanner".');  % note that some scanner (such as Siemens) may set a reflection in the initial orientation matrix they set, without impacting the left-right orientation (ie, the reflection is in another dimension)
+        structure_errors_counter = structure_errors_counter + STRUCTURE_ERROR_INITIAL_REFLECTION;
     end
     if just_check == true
         % just checking structural errors, we return a unique error code to specify all errors found
@@ -115,7 +123,7 @@ function returncode = autoreorient(varargin)
         % Test with MRIcron by unchecking "Reorient image before loading" option in the preferences, this will load the raw image with an identity matrix. If you have an anisotropic image (eg, bold, dti), without reorientation you will see the image will be anisotropic, showing there is no way to infer what was the original voxel-size if the orientation matrix is not used.
         % info = niftiinfo('t1.nii'); info.Transform.T' shows the orientation matrix (alternative to SPM).
         if precoreg_reset_orientation == true
-            fprintf('Reset orientation but keep scale/voxel-size\n');
+            fprintf('Reset orientation but keep scale/voxel-size');
             % raw original voxel space with no orientation
             % get voxel size
             % NOT reliable, this may have been manipulated. Unfortunately, we then have no way to get back the original dimensions...
@@ -127,7 +135,7 @@ function returncode = autoreorient(varargin)
             % update input volume in-memory
             input_vol.mat = M;
         elseif isvector(precoreg_reset_orientation) && (numel(precoreg_reset_orientation) == 3)
-            fprintf('Reset orientation and scale/voxel-size to the specified vector:\n');
+            fprintf('Reset orientation and scale/voxel-size to the specified vector:');
             disp(precoreg_reset_orientation);
             % Reset with a blank orientation matrix but with the scale factors as provided by user
             M = diag([precoreg_reset_orientation(:); 1]);
@@ -136,13 +144,13 @@ function returncode = autoreorient(varargin)
             % update input volume in-memory
             input_vol.mat = M;
         elseif strcmp(precoreg_reset_orientation, 'mat0')
-            fprintf('Reset orientation to previous orientation\n');
+            fprintf('Reset orientation to previous orientation');
             % reuse previously saved orientation matrix
             % simply reload mat0 and overwrite the current orientation matrix
             input_vol.mat = input_vol.private.mat0;
             spm_get_space(inputpath, input_vol.mat);
         end
-        fprintf('Reset orientation done!\n');
+        fprintf('Reset orientation done!');
     end
 
     % == Smooth input image, helps a lot with the coregistration (which is inherently noisy since there is no perfect match)
@@ -154,7 +162,7 @@ function returncode = autoreorient(varargin)
 
     % == Manual/Pre coregistration (without using SPM)
     if precoreg
-        fprintf('Pre-coregistration by translation of centroid (resetting origin), please wait...\n');
+        fprintf('Pre-coregistration by translation of centroid (resetting origin), please wait...');
         % Find the center of mass
         input_centroid = [get_centroid(input_vol, true, false, debugmode) 1];  % add a unit factor to be able to add the translation of the world-to-voxel mapping in the nifti headers, see: https://www.youtube.com/watch?v=UvevHXITVG4
         %template_centroid = [get_centroid(template_vol, true, false, debugmode) 1];
@@ -179,12 +187,13 @@ function returncode = autoreorient(varargin)
         % * spm_write_vol(vol, vol_data) where vol is a spm nifti structure as created by spm_vol(), and vol_data is a 3D matrix of the content of the nifti, and vol a nifti structure as accepted or created by spm using spm_read_vols().
         % * create(vol) where vol is a spm nifti structure as created by nifti(), and it will be saved in vol.fname path. This last option is the most complete, as it will save everything.
         %spm_write_vol(input_vol, input_vol.mat);
-        fprintf('Pre-coregistration done!\n');
+        fprintf('Pre-coregistration done!');
     end
 
     % == Affine coregistration (with translation)
     if strcmp(regmode, 'affine')
         fprintf('Affine reorientation\n');
+        fprintf('NOTE: spm_affreg() can introduce reflections, even when using rigid-body mode!')
         if exist('flags_affine', 'var') && ~isempty(flags_affine)
             if isarray(flags_affine.sep)
                 % If we are provided a vector of sampling steps, spm_affreg() does not support multiple sampling steps (contrary to spm_coreg()), so we manage that manually
@@ -238,7 +247,7 @@ function returncode = autoreorient(varargin)
             if strcmp(affdecomposition, 'qr')
                 % In QR decomposition mode, we will decompose the 3D affine transform matrix M into a rotation matrix Q, a scaling matrix K, and a shearing matrix S.
                 % Note that QR decomposition does not prevent improper rotation, if the original transform requires it, there will be a reflection
-                fprintf('Using QR decomposition...\n')
+                fprintf('Using QR decomposition...')
                 % QR Decomposition to extract the rotation matrix Q and the scaling+shearing matrix R
                 % See https://math.stackexchange.com/questions/1120209/decomposition-of-4x4-or-larger-affine-transformation-matrix-to-individual-variab/2353782#2353782
                 [Q, R] = qr(Mnotrans);  % pure MATLAB implementations can be found at: http://web.mit.edu/18.06/www/Essays/gramschmidtmat.pdf and https://blogs.mathworks.com/cleve/2016/07/25/compare-gram-schmidt-and-householder-orthogonalization-algorithms/ and https://blogs.mathworks.com/cleve/2016/10/03/householder-reflections-and-the-qr-decomposition/#742ad311-5d1b-4b5d-8768-11799d40f72d
@@ -315,7 +324,7 @@ function returncode = autoreorient(varargin)
                 % In SVD decomposition mode, we will decompose the affine without translation into 2 rotation matrices + 1 anisotropic rescaling in the middle (with the combination of the rescaling and subsequent rotation to a shearing): https://en.wikipedia.org/wiki/Singular_value_decomposition#/media/File:Singular-Value-Decomposition.svg
                 % Pros and cons of using a SVD: unique decomposition (main diagonal is positive), no shearing (containing in the scaling matrix S * last rotational matrix), con is that shearing cannot be separated and hence although it can be removed, the transform will be less faithful to the original non constrained affine transform (but it's ok if regtype = rigid, but not if using mni for example)
                 % Note that SVD does NOT prevent reflections, as it can generate improper rotations if required to reproduce the original transform: https://math.stackexchange.com/questions/2331207/relation-between-svd-and-affine-transformations-2d?rq=1
-                fprintf('Using SVD decomposition...\n')
+                fprintf('Using SVD decomposition...')
                 % Calculate the SVD decomposition
                 [u, s, v] = svd(Mnotrans);
                 % Fix improper rotations in rotation matrices v' or u, by transferring the reflections to the scaling matrix s
@@ -344,7 +353,7 @@ function returncode = autoreorient(varargin)
                 end
                 % Sanity check: check if there is any remaining imbalanced reflection/mirroring
                 if single(det(u)) == -1 || single(det(v')) == -1 || (any(sign(diag(s)) == -1) && are_reflections_imbalanced(s))
-                    error('Reflections detected in the decomposed matrices, cannot continue!');
+                    error('Reflections detected in the decomposed matrices (ie, after trying to correct them), hence failed correction, cannot continue!');
                 end
                 % Combine back all transforms
                 M2 = u*s*v'*s2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
@@ -358,7 +367,7 @@ function returncode = autoreorient(varargin)
                 M = M3;
             elseif strcmp(affdecomposition, 'imatrix')
                 % Decompose and constraint reflections/shearing using spm_imatrix (fixed)
-                fprintf('Using spm_imatrix decomposition...\n')
+                fprintf('Using spm_imatrix decomposition...')
 
                 % Extract the transform parameters as a vector from the 3D affine transform matrix
                 iM = spm_imatrix(M);
@@ -391,7 +400,7 @@ function returncode = autoreorient(varargin)
         % Sanity check: check if there is no reflections nor shearing (or if there are reflections, there is an even number so they cancel out into rotations)
         [T, R, Z, S] = get_imat(M);
         if strcmp(affdecomposition, 'none')
-            fprintf('Warning: affdecomposition is set to none, no sanity check will be done to ensure that the object structure is maintained (ie, no reflection nor shearing - meaning that the brain can see its left and right sides be flipped).\n');
+            warning('affdecomposition is set to none, no sanity check will be done to ensure that the object structure is maintained (ie, no reflection nor shearing - meaning that the brain can see its left and right sides be flipped).');
         else
             assert(~any(sign(Z) == -1) || ~isodd(sum(sign(Z) == -1)));
         end
@@ -408,7 +417,8 @@ function returncode = autoreorient(varargin)
         % Joint Histogram coregistration
         % Keep in mind only rotations can be done, which excludes reflections (that's good), but also rescaling, including isotropic rescaling (that's bad), so we need another step (such as affine reorientation) before to be able to rescale as necessary, and also translate (although this coregistration is invariant to translations, if you try to coregister manually after or do between-subjects coregistration this will be an issue)
         % Note also that spm_coreg() will try to set the input volume's origin to match the template's origin (hence on AC-PC)
-        fprintf('Joint Histogram (mutual information) reorientation\n');
+        % This regmode cannot cause reflections, but it can cause shearing and anisotropic scaling depending on the given parameters
+        fprintf('Joint Histogram (mutual information) reorientation');
         flags = struct('sep', [4, 2]);
         flags.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
         flags.tol = [0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.01, 0.001, 0.001, 0.001];  % VERY important to get good results, these are defaults from the GUI
@@ -417,14 +427,52 @@ function returncode = autoreorient(varargin)
         x = spm_coreg(template_vol, smoothed_vol2, flags);
         % Convert the transform parameters into a 3D affine transform matrix (but it's only rigid-body)
         M = spm_matrix(x);
-        % Apply the reorientation and save back the new coordinations
+        % Apply the reorientation on the input image header and save back the new coordinations in the original input file
         % also apply an inversion to project into the input volume space (instead of template space)
         spm_get_space(inputpath, pinv(M)*spm_get_space(inputpath));  % spm_get_space(inputpath) == input_vol.mat
         % alternative to (but slower because we are not using the pseudoinverse here) : M \ input_vol.mat
+        % update input volume in-memory, so we can do other manipulations afterwards (such as sanity checks)
+        input_vol.mat = M;
         % TODO: to enhance performance, first do a spm_coreg using a binarized input image (ie, a brain mask), using the mean as is done for the centroids calculation? Just to ensure to have a good starting point for orientation.
     end %endif
-    fprintf('Autoreorientation done!\n');
-    returncode = 0;
+
+    % == Sanity checks on output image
+    if (check_shearing(input_vol))
+        structure_errors_counter = structure_errors_counter + STRUCTURE_ERROR_AFTER_SHEARING;
+    end
+    if (check_anisotropic_scaling(input_vol))
+        structure_errors_counter = structure_errors_counter + STRUCTURE_ERROR_AFTER_ANISOTROPIC_SCALING;
+    end
+    if (check_reflection(input_vol))
+        structure_errors_counter = structure_errors_counter + STRUCTURE_ERROR_AFTER_REFLECTION;
+    end
+    % Only output warnings if the changes were different in the initial volume
+    if ((bitand(structure_errors_counter, STRUCTURE_ERROR_AFTER_SHEARING) > 0) ~= (bitand(structure_errors_counter, STRUCTURE_ERROR_INITIAL_SHEARING) > 0))
+        if ((bitand(structure_errors_counter, STRUCTURE_ERROR_AFTER_SHEARING) > 0) && ~(bitand(structure_errors_counter, STRUCTURE_ERROR_INITIAL_SHEARING) > 0))
+            warning('Shearing is present in the output image but was not in input!');
+        else
+            warning('Shearing is absent in output image but was present in input!');
+        end  % endif
+    end  % endif
+    if ((bitand(structure_errors_counter, STRUCTURE_ERROR_AFTER_ANISOTROPIC_SCALING) > 0) ~= (bitand(structure_errors_counter, STRUCTURE_ERROR_INITIAL_ANISOTROPIC_SCALING) > 0))
+        if ((bitand(structure_errors_counter, STRUCTURE_ERROR_AFTER_ANISOTROPIC_SCALING) > 0) && ~(bitand(structure_errors_counter, STRUCTURE_ERROR_INITIAL_ANISOTROPIC_SCALING) > 0))
+            warning('Anisotropic scaling is present in the output image but was not in input!');
+        else
+            warning('Anisotropic scaling is absent in output image but was present in input!');
+        end  % endif
+    end  % endif
+    if ((bitand(structure_errors_counter, STRUCTURE_ERROR_AFTER_REFLECTION) > 0) ~= (bitand(structure_errors_counter, STRUCTURE_ERROR_INITIAL_REFLECTION) > 0))
+        if ((bitand(structure_errors_counter, STRUCTURE_ERROR_AFTER_REFLECTION) > 0) && ~(bitand(structure_errors_counter, STRUCTURE_ERROR_INITIAL_REFLECTION) > 0))
+            warning('Reflection is present in the output image but was not in input! This means that the left and right hemisphere may be interverted!');
+        else
+            warning('Reflection is absent in output image but was present in input! This means that the left and right hemisphere may be interverted!');
+        end  % endif
+    end  % endif
+
+    % == Finalizing return variables
+    returncode = structure_errors_counter;
+    Mdiff = input_vol.mat - M_orig;
+    fprintf('Autoreorientation done!');
     return;
 end %endfunction, end of main routine
 
@@ -438,6 +486,29 @@ function [T, R, Z, S] = get_imat(M)
     % Multiple assign each parameter into its own variable (see help spm_matrix: T for translation, R rotation, Z zoom/scale, S shearing)
     iM2 = mat2cell(iM, 1, ones(1,4)*3);
     [T, R, Z, S] = iM2{:};
+end %endfunction
+
+function result = check_shearing(input_vol)
+% result = check_shearing(input_vol)
+% Check if there is any shearing in the 3D affine transform matrix
+    iM = spm_imatrix(input_vol.mat);
+    %iM_orig = spm_imatrix(input_vol.private.mat0);  % NOT reliable: svol.private.mat0 is simply the previously saved orientation matrix, not necessarily the original one
+    result = sum(abs(iM(10:12))) > 1E-5;
+end %endfunction
+
+function result = check_anisotropic_scaling(input_vol)
+% result = check_anisotropic_scaling(input_vol)
+% Check if there is any anisotropic scaling in the 3D affine transform matrix
+    iM = spm_imatrix(input_vol.mat);
+    result = sum(abs(iM(7:9))) > 1E-5;  % alternative: calculate the QR decomposition
+end %endfunction
+
+function result = check_reflection(input_vol)
+% result = check_reflection(input_vol)
+% Check if there is any reflection in the 3D affine transform matrix
+    [Q, R] = qr(input_vol.mat(1:3,1:3));
+    Z = sign(diag(R)) .* abs(diag(R));
+    result = ((single(det(Q)) == -1.0) || (any(sign(Z) == -1, 'all') && isodd(sum(sign(Z) == -1))));
 end %endfunction
 
 function res = isodd(i)
